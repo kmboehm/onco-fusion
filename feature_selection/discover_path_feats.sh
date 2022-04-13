@@ -1,0 +1,1 @@
+python ../feature_selection_toolkit/select_features.py path-features/_discovery_df_discov.csv --output_df_path path-features/_feat_eval_df_discov.csv --method cph --output_plot_path path-features/path_feats_discov.png --outlier_std_threshold 5 --xy_covar x --modality pathology

@@ -1,0 +1,11 @@
+setting:
+  label: 45
+  resampledPixelSpacing: [1.0, 1.0, 1.0]
+  binWidth: 25
+  interpolator: 'sitkBSpline'
+
+imageType:
+  Original: {}
+  LoG: {'sigma': [1.0, 3.0]}
+  Wavelet: {}
+

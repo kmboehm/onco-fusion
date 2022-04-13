@@ -1,0 +1,16 @@
+# docker-compose.yml
+# Used to ensure container is executed using host user id and gid (so files written by container are owned by user), and docker image remains user agnostic. 
+# https://medium.com/faun/set-current-host-user-for-docker-container-4e521cef9ffc
+version: '3'
+services:
+  star_dist:
+    image: docker.io/druvpatel/qupath-stardist
+    user: $MYUID:$MYGID
+    working_dir: $PWD
+    stdin_open: true
+    volumes:
+      - $PWD/data:/data
+      - $PWD/models:/models
+      - $PWD/scripts:/scripts
+      - $PWD/detections:/detections 
+    tty: true

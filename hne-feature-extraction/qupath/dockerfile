@@ -1,0 +1,54 @@
+
+# https://hub.docker.com/r/adoptopenjdk/openjdk14
+FROM adoptopenjdk/openjdk14:x86_64-debian-jdk-14.0.2_12 
+MAINTAINER MSK-MIND
+LABEL "app"="qupath"
+LABEL "version"="0.2.3"
+LABEL "description"="qupath bundled with stardist and tensorflow for CPUs. Change -Ptensorflow-cpu=false to switch to GPUs"
+RUN apt-get update && \
+    apt-get install -y sudo tree wget git vim  && \
+    apt-get install -y gnupg2 && \
+    apt-get install -y binutils  && \
+    apt-get install -y libxml2-dev libtiff-dev libglib2.0-0 libxcb-shm0-dev libxrender-dev libxcb-render0-dev && \
+    apt-get install -y libgl1-mesa-glx && \
+    apt-get install -y software-properties-common
+
+#install cuda 10.2
+RUN  apt-get update && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-ubuntu1604.pin && \
+sudo mv cuda-ubuntu1604.pin /etc/apt/preferences.d/cuda-repository-pin-600 && \
+sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub && \
+sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/ /" && \
+sudo apt-get update && \
+sudo apt-get -y install cuda-libraries-10-2 
+
+RUN echo 'export PATH=/usr/local/cuda-10.2/bin:$PATH' >> ~/.bashrc &&  \
+    echo 'export LD_LIBRARY_PATH=/usr/local/cuda-10.2/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc && \
+    . ~/.bashrc
+
+
+# install cudnn7 for cuda 10.2
+## these can be found on nvidia's website after logging in through a developer account
+## to build this docker image manually, download these files and copy them to the  /qupath directory  (the same directory as this dockerfile)
+## https://developer.nvidia.com/compute/machine-learning/cudnn/secure/7.6.5.32/Production/10.2_20191118/Ubuntu16_04-x64/libcudnn7_7.6.5.32-1%2Bcuda10.2_amd64.deb
+## https://developer.nvidia.com/compute/machine-learning/cudnn/secure/7.6.5.32/Production/10.2_20191118/Ubuntu16_04-x64/libcudnn7-dev_7.6.5.32-1%2Bcuda10.2_amd64.deb
+## https://developer.nvidia.com/compute/machine-learning/cudnn/secure/7.6.5.32/Production/10.2_20191118/Ubuntu16_04-x64/libcudnn7-doc_7.6.5.32-1%2Bcuda10.2_amd64.deb
+COPY libcudnn7_7.6.5.32-1+cuda10.2_amd64.deb .
+COPY libcudnn7-dev_7.6.5.32-1+cuda10.2_amd64.deb .
+COPY libcudnn7-doc_7.6.5.32-1+cuda10.2_amd64.deb .
+RUN apt-get install -y  dpkg-dev &&  apt install ./libcudnn7_7.6.5.32-1+cuda10.2_amd64.deb && \
+apt install  ./libcudnn7-dev_7.6.5.32-1+cuda10.2_amd64.deb && \
+apt install ./libcudnn7-doc_7.6.5.32-1+cuda10.2_amd64.deb
+
+
+RUN /bin/sh -c export DISPLAY=:0.0
+RUN /bin/sh -c cd / && mkdir qupath-gpu &&  \
+    git clone --branch v0.2.3 https://github.com/qupath/qupath.git /qupath-gpu &&  \
+    cd /qupath-gpu &&   \
+    ./gradlew clean build createPackage -x test -Ptensorflow-gpu=true
+
+RUN /bin/sh -c cd / && mkdir qupath-cpu &&    \
+        git clone --branch v0.2.3 https://github.com/qupath/qupath.git /qupath-cpu &&   \
+        cd /qupath-cpu &&   \
+        ./gradlew clean build createPackage -x test -Ptensorflow-cpu=true
+
+RUN apt-get update && apt-get install -y libnccl-dev
