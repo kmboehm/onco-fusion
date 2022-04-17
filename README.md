@@ -1,7 +1,4 @@
 # onco-fusion
-**2.0. Code (See Files section):**
-- code.tar.gz
-
 
 ```
 code/
