@@ -5,7 +5,5 @@ setting:
   interpolator: 'sitkBSpline'
 
 imageType:
-  Original: {}
-  LoG: {'sigma': [1.0, 3.0]}
   Wavelet: {}
 

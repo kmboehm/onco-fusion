@@ -1,7 +1,10 @@
 import pandas as pd
 import numpy as np
 import os
+import yaml
 from joblib import Parallel, delayed
+import sys
+sys.path.append('../tissue-type-training')
 import config
 
 
@@ -13,7 +16,10 @@ def get_density(obj_feats, regional_feats, result_dict, parent, class_):
     obj_count = obj_mask.sum()
     # print(obj_count)
     key_ = '{}_{}_density'.format(parent, class_)
-    result_dict[key_] = float(obj_count) / parent_area
+    try:
+        result_dict[key_] = float(obj_count) / parent_area
+    except ZeroDivisionError:
+        result_dict[key_] = np.nan
 
 
 def get_quantiles(object_feats, mask, feat, output_feat_name, results_dict):
@@ -26,7 +32,7 @@ def get_quantiles(object_feats, mask, feat, output_feat_name, results_dict):
 
 
 def extract_feats(object_feat_fn, regional_feature_df_, slide_id):
-    regional_feature_df = regional_feature_df_[regional_feature_df_.index.isin([slide_id])]
+    regional_feature_df = regional_feature_df_[regional_feature_df_.index.astype(str) == str(slide_id)]
     if len(regional_feature_df) != 1:
         return {}
 
@@ -162,16 +168,19 @@ def extract_feats(object_feat_fn, regional_feature_df_, slide_id):
 
 
 if __name__ == '__main__':
-    regional_feat_df_filename = os.path.join(config.args.base_path,
-                                'tissue_tile_features/2021-02-06_14.26.33_fold-2_epoch018.csv')
-    object_detection_dir = os.path.join(config.args.base_path, 'final_objects')
-    merged_feat_df_filename = os.path.join(config.args.base_path,
-                            'tissue_tile_features/2021-02-06_14.26.33_fold-2_epoch018_merged_scanned.csv')
-    SERIAL = False
-    DETECTION_PROB_THRESHOLD = 0.1
+
+    checkpoint_name = config.args.checkpoint_path.split('/')[-1].replace('.torch', '')
+    
+    regional_feat_df_filename = 'tissue_tile_features/{}.csv'.format(checkpoint_name)
+
+    object_detection_dir = 'final_objects/{}'.format(checkpoint_name)
+    
+    merged_feat_df_filename = 'tissue_tile_features/{}_merged.csv'.format(checkpoint_name)
+    SERIAL = True
+    DETECTION_PROB_THRESHOLD = 0.5
 
     slide_list = [x for x in os.listdir(object_detection_dir) if (('.csv' in x) or ('.tsv' in x))]
-    regional_feat_df = pd.read_csv(regional_feat_df_filename).rename(columns={'Unnamed: 0': 'image_id'}).set_index('image_id')
+    regional_feat_df = pd.read_csv(regional_feat_df_filename).set_index('image_id')
 
     results = {}
     if SERIAL:
@@ -179,16 +188,23 @@ if __name__ == '__main__':
             print(slide)
             result = extract_feats(os.path.join(object_detection_dir, slide), regional_feat_df, slide[:-4])
             results.update(result)
-            # break
     else:
         dicts = Parallel(n_jobs=32)(delayed(extract_feats)(os.path.join(object_detection_dir, slide), regional_feat_df, slide[:-4]) for slide in slide_list)
         for dict_ in dicts:
             results.update(dict_)
 
     df = pd.DataFrame(results).T
-    print(df)
     df = df.join(regional_feat_df, how='inner')
     print(df)
 
-    df.to_csv(merged_feat_df_filename, index=True)
+    df = df.reset_index().rename(columns={'index': 'image_id'})
+    df['image_id'] = df['image_id'].astype(str)
+
+    hne_df = pd.read_csv(config.args.preprocessed_cohort_csv_path)
+    hne_df['image_id'] = hne_df['image_path'].apply(lambda x: x.split('/')[-1][:-4]).astype(str)
+    df = df.join(hne_df[['image_id', 'Patient ID', 'n_foreground_tiles']].set_index('image_id'), on='image_id', how='left')
+    df = df.drop(columns=['image_id'])
+    df['Patient ID'] = df['Patient ID'].astype(str).apply(lambda x: x.zfill(3))
+    df = df.fillna(df.median())
+    df.to_csv(merged_feat_df_filename, index=False)
 

@@ -32,10 +32,6 @@ def get_downscaled_thumbnail(slide, scale_factor=32):
     return np.array(img)
 
 
-def get_random_slide(config):
-    return OpenSlide(os.path.join(config.args.wsi_dir, choice(os.listdir(config.args.wsi_dir))))
-
-
 def get_full_resolution_generator(slide, tile_size, overlap=0, level_offset=0):
     assert isinstance(slide, OpenSlide) or isinstance(slide, ImageSlide)
     generator = DeepZoomGenerator(slide, overlap=overlap, tile_size=tile_size, limit_bounds=False)
@@ -134,59 +130,13 @@ def get_current_time():
     return str(datetime.now()).replace(' ', '_').split('.')[0].replace(':', '.')
 
 
-def load_preprocessed_df(file_name, min_n_tiles, slide_codes, cols=None, seed=None, explode=True, subsample=False, slides_per_pt_limit=-1):
+def load_preprocessed_df(file_name, min_n_tiles, cols=None, seed=None, explode=True):
     if cols:
         df_ = pd.read_csv(file_name, low_memory=False, usecols=cols)
     else:
         df_ = pd.read_csv(file_name, low_memory=False)
 
-    # df_ = df_.head(8)
-    # print('WARNING: Only using first 8 slides.')
-
-    if 'img_hid' not in df_.columns:
-        df_['img_hid'] = df_['image_id']
-
-    if slide_codes:
-        slide_code_mask = df_.img_hid.str.contains('-' + slide_codes[0])
-        for slide_code in slide_codes[1:]:
-            slide_code_mask |= df_.img_hid.str.contains('-' + slide_code)
-        df_ = df_[slide_code_mask]
-
-    df_ = df_[df_.x >= min_n_tiles]
-
-    if slides_per_pt_limit != -1:
-        # enforce slide/person max
-        print('Warning: enforcing 2 slides/patient maximum')
-        df_list = []
-        for img_hid, sub_df in df_.groupby('mrn'):
-            slides = sub_df.img_hid.unique()
-            n_slides = len(slides)
-            if n_slides <= slides_per_pt_limit:
-                df_list.append(sub_df)
-            else:
-                df_list.append(sub_df[:slides_per_pt_limit])
-        df_ = pd.concat(df_list, axis=0, sort=False)
-
-    if 'observed' in df_.columns:
-        df_.observed = df_.observed.astype(bool)
-
-    if seed:
-        print('Shuffling train-val assignments for cross-validation')
-        if 'observed' in df_.columns:
-            temp_df = df_.groupby('mrn').agg('mean').observed
-            patient_ids = temp_df.index.tolist()
-            observed = temp_df.tolist()
-            train_ids, val_ids = train_test_split(patient_ids,
-                                                   stratify=observed,
-                                                   random_state=seed,
-                                                   test_size=0.25)
-        else:
-            train_ids, val_ids = train_test_split(df_.mrn.unique(),
-                                                  random_state=seed,
-                                                  test_size=0.25)
-
-        df_.loc[df_.mrn.isin(train_ids), 'split'] = 'train'
-        df_.loc[df_.mrn.isin(val_ids), 'split'] = 'val'
+    df_ = df_[df_.n_foreground_tiles >= min_n_tiles]
 
     df_.tile_address = df_.tile_address.map(eval)
     if explode:
@@ -196,32 +146,26 @@ def load_preprocessed_df(file_name, min_n_tiles, slide_codes, cols=None, seed=No
         #     lambda x: get_tile_file_name('---', x.img_hid, x.tile_address),
         #     axis=1).str.split('/').map(lambda x: x[-1])
 
-    if subsample:
-        assert seed
-        # df_ = df_.groupby('img_hid', as_index=False).apply(
-        #     lambda grp: grp.sample(n=subsample, random_state=seed))
-        df_list = []
-        for img_hid, sub_df in df_.groupby('img_hid'):
-            if len(sub_df) <= subsample:
-                df_list.append(sub_df)
-            else:
-                df_list.append(sub_df.sample(subsample))
-        df_ = pd.concat(df_list, axis=0, sort=False)
     return df_
 
 
 def k_fold_ptwise_crossval(df, k, seed):
-    if 'mrn' not in df.columns:
-        df['mrn'] = df.patient_id
-
     if 'observed' in df.columns:
-        temp_df = df.groupby('mrn').agg('mean').observed
+        if 'Patient ID' in df.columns:
+            temp_df = df.groupby('Patient ID').agg('mean').observed
+        else:
+            temp_df = df.groupby('image_path').agg('mean').observed
+            
         patient_ids = np.array(temp_df.index.tolist())
         observed = np.array(temp_df.tolist())
 
         kf = StratifiedKFold(n_splits=k, random_state=seed % (2**32 - 1), shuffle=True).split(patient_ids, observed)
     else:
-        patient_ids = np.sort(df.mrn.unique())
+        if 'Patient ID' in df.columns:
+            patient_ids = np.sort(df['Patient ID'].unique())
+        else:
+            patient_ids = np.sort(df['image_path'].unique())
+
         kf = KFold(n_splits=k, random_state=seed % (2**32 - 1), shuffle=True).split(patient_ids)
 
     df_list = []
@@ -230,8 +174,12 @@ def k_fold_ptwise_crossval(df, k, seed):
         test_labels = patient_ids[test_indices]
         # train_labels = list(set(DF.index[train_indices].tolist()))
         # test_labels = list(set(DF.index.tolist()) - set(train_labels))
-        train_mask = df.mrn.isin(train_labels)
-        test_mask = df.mrn.isin(test_labels)
+        if 'Patient ID' in df.columns:
+            train_mask = df['Patient ID'].isin(train_labels)
+            test_mask = df['Patient ID'].isin(test_labels)
+        else:
+            train_mask = df['image_path'].isin(train_labels)
+            test_mask = df['image_path'].isin(test_labels)
 
         assert test_mask.sum() > 0
         assert train_mask.sum() > 0
@@ -372,7 +320,7 @@ def make_otsu(img, scale=1):
     return (_img < (threshold * scale)).astype(float)
 
 
-def label_image_tissue_type(thumbnail, map_key, font_dir='/gpfs/mskmind_ess/boehmk/histocox'):
+def label_image_tissue_type(thumbnail, map_key):
     """
     Labels tissue with hue overlay based on predicted classes.
     """
@@ -384,11 +332,10 @@ def label_image_tissue_type(thumbnail, map_key, font_dir='/gpfs/mskmind_ess/boeh
         colors.append(tuple([int(255 * x) for x in
                              colorsys.hsv_to_rgb(0.5 - (score - range_[0]) / denom, 0.5, 1.0)]))
     d = ImageDraw.Draw(thumbnail)
-    fnt = ImageFont.truetype('{}/arial.ttf'.format(font_dir), 40)
 
     text_locations = [(10, 10+40*x) for x in range(len(map_key))]
     for (class_, score), text_location in zip(map_key.items(), text_locations):
-        d.text(text_location, class_, fill=colors[score], font=fnt)
+        d.text(text_location, class_, fill=colors[score])
     return thumbnail
 
 
@@ -396,3 +343,21 @@ def get_fold_slides(df, world_size, rank):
     all_slides = df.image_id.unique()
     chunks = np.array_split(all_slides, world_size)
     return chunks[rank]
+
+
+def add_scale_bar(thumbnail, scale, slide_mag, len_in_um=1000):
+    if slide_mag == 20:
+        um_per_pix = 0.5
+    elif slide_mag == 40:
+        um_per_pix = 0.25
+    else:
+        raise RuntimeError("Unhandled slide mag {}x".format(slide_mag))
+
+    um_per_pix *= scale
+
+    len_in_pixels = len_in_um / float(um_per_pix)
+
+    endpoints = [(10, 10+40*6), (10+len_in_pixels, 10+40*6)]
+    d = ImageDraw.Draw(thumbnail)
+    d.line(endpoints, fill='black', width=5)
+    return thumbnail

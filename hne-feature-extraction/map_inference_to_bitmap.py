@@ -1,23 +1,26 @@
 import pandas as pd
 import numpy as np
 import os
+import yaml
 from joblib import Parallel, delayed
 from openslide import OpenSlide
 from openslide.lowlevel import OpenSlideUnsupportedFormatError
-import general_utils
-import config
 from skimage.draw import rectangle_perimeter, rectangle
 from PIL import Image
+import sys
+sys.path.append('../tissue-type-training')
+import general_utils
+import config
 
-
-def convert_to_bitmap(slide_name, bitmap_dir, inference_dir, scale, map_key):
-    slide_bitmap_subdir = os.path.join(bitmap_dir, slide_name.split('.')[0])
+def convert_to_bitmap(slide_path, bitmap_dir, inference_dir, scale, map_key):
+    slide_id = slide_path.split('/')[-1][:-4]
+    slide_bitmap_subdir = os.path.join(bitmap_dir, slide_id)
     if not os.path.exists(slide_bitmap_subdir):
         os.mkdir(slide_bitmap_subdir)
     map_reverse_key = dict([(v, k) for k, v in map_key.items()])
 
     # load thumbnail
-    slide = OpenSlide(os.path.join(config.args.wsi_dir, slide_name))
+    slide = OpenSlide(slide_path)
 
     slide_mag = general_utils.get_magnification(slide)
     scale = general_utils.adjust_scale_for_slide_mag(slide_mag=slide_mag,
@@ -32,7 +35,7 @@ def convert_to_bitmap(slide_name, bitmap_dir, inference_dir, scale, map_key):
         bitmaps[key] = np.zeros(thumbnail.shape[:2], dtype=np.uint8)
 
     # load tile class inference csv, create tile_address and predicted_class column
-    df = pd.read_csv(os.path.join(inference_dir, slide_name.replace('.svs', '.csv')))
+    df = pd.read_csv(os.path.join(inference_dir, slide_id + '.csv'))
     df['predicted_class'] = df.drop(columns=['label', 'tile_file_name']).idxmax(axis='columns').str.replace(
         'score_', '').astype(int)
     df['address'] = df['tile_file_name'].apply(
@@ -69,11 +72,8 @@ def convert_to_bitmap(slide_name, bitmap_dir, inference_dir, scale, map_key):
                                                      overlap=overlap,
                                                      range_=range_)
     thumbnail = Image.fromarray(thumbnail)
-    thumbnail = general_utils.label_image_tissue_type(thumbnail, map_key, config.args.base_path)
+    thumbnail = general_utils.label_image_tissue_type(thumbnail, map_key)
     thumbnail.save(os.path.join(slide_bitmap_subdir, '_overlay.png'))
-
-
-        # np.save(os.path.join(bitmap_dir, class_label + '.npy'), )
 
 
 if __name__ == '__main__':
@@ -83,23 +83,21 @@ if __name__ == '__main__':
     if not os.path.exists(bitmap_dir):
         os.mkdir(bitmap_dir)
 
-    slide_list = [x.replace('.csv', '.svs') for x in os.listdir(inference_dir)]
+    df = pd.read_csv(config.args.preprocessed_cohort_csv_path)
+    with open('../global_config.yaml', 'r') as f:
+        DIRECTORIES = yaml.safe_load(f)
+        DATA_DIR = DIRECTORIES['data_dir']
+    df['image_path'] = df['image_path'].apply(lambda x: os.path.join(DATA_DIR, x))
 
     scale_factor = config.args.tile_size / config.desired_otsu_thumbnail_tile_size
-
-    # map_key = {'Stroma': 0,
-    #            'Tumor': 1,
-    #            'Fat': 2,
-    #            'Vessel': 3,
-    #            'Necrosis': 4}
 
     map_key = {'Stroma': 0,
                'Tumor': 1,
                'Fat': 2,
                'Necrosis': 3}
 
-    for slide in slide_list:
-        print(slide)
-        convert_to_bitmap(slide, bitmap_dir, inference_dir, scale_factor, map_key)
+    for slide_path in df['image_path']:
+        print(slide_path)
+        convert_to_bitmap(slide_path, bitmap_dir, inference_dir, scale_factor, map_key)
 
     # Parallel(n_jobs=32)(delayed(convert_to_bitmap)(slide, bitmap_dir, inference_dir, scale_factor, map_key) for slide in slide_list)

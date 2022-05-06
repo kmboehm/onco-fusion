@@ -4,6 +4,8 @@ import os
 from joblib import Parallel, delayed
 from PIL import Image
 from skimage import measure
+import sys
+sys.path.append('../tissue-type-training')
 import config
 
 
@@ -139,16 +141,11 @@ def extract_feats(dir_, slide_name, class_list):
 if __name__ == '__main__':
     checkpoint_name = config.args.checkpoint_path.split('/')[-1].replace('.torch', '')
     bitmap_dir = 'bitmaps/{}'.format(checkpoint_name)
-    feat_df_filename = '{}/tissue_tile_features/{}.csv'.format(config.args.base_path, checkpoint_name)
+    feat_df_filename = 'tissue_tile_features/{}.csv'.format(checkpoint_name)
     SERIAL = False
 
     slide_list = os.listdir(bitmap_dir)
 
-    # map_key = {'Stroma': 0,
-    #            'Tumor': 1,
-    #            'Fat': 2,
-    #            'Vessel': 3,
-    #            'Necrosis': 4}
     map_key = {'Stroma': 0,
                'Tumor': 1,
                'Fat': 2,
@@ -168,6 +165,7 @@ if __name__ == '__main__':
 
     df = pd.DataFrame(results).T
     print(df)
-
-    df.to_csv(feat_df_filename, index=True)
+    
+    df = df.reset_index().rename(columns={'index': 'image_id'})
+    df.to_csv(feat_df_filename, index=False)
 

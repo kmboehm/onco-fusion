@@ -1,0 +1,25 @@
+name: sklearn
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - scikit-learn
+  - pandas
+  - lifelines
+  - seaborn
+  - xlrd
+  - openpyxl
+  - rasterio
+  - shapely
+  - albumentations
+  - requests
+  - bokeh
+  - libtiff
+  - colorcet
+  - holoviews
+  - pingouin
+  - pip
+  - pip:
+    - statannot
+prefix: /Users/boehmk/anaconda3/envs/sklearn
