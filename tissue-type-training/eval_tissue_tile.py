@@ -1,5 +1,5 @@
 from sklearn.metrics import average_precision_score, accuracy_score, balanced_accuracy_score, confusion_matrix
-from sklearn.utils import compute_class_weight
+from sklearn.utils.class_weight import compute_class_weight
 import pandas as pd
 import config
 import json
@@ -12,14 +12,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 from confusion_matrix_analysis import cm_analysis
-from general_utils import label_image_tissue_type
+from general_utils import label_image_tissue_type, add_scale_bar
 
-FONTSIZE = 8
+
+FONTSIZE = 7
 plt.rc('legend',fontsize=FONTSIZE, title_fontsize=FONTSIZE)
 plt.rc('xtick',labelsize=FONTSIZE)
 plt.rc('ytick',labelsize=FONTSIZE)
 plt.rc("axes", labelsize=FONTSIZE)
-plt.rc('font',**{'family':'sans-serif','sans-serif':['Arial']})
 
 
 def get_auprc(df):
@@ -45,24 +45,11 @@ def get_accuracy(df):
     return {'accuracy': accuracy_score(y_true=df.label, y_pred=df.predicted_class)}
 
 
-def get_balanced_accuracy(df):
-    # raise NotImplementedError
-    weights = compute_class_weight('balanced', df.label.unique(), df.label)
-    sample_weights = df.label.copy()
-    for idx in range(len(weights)):
-        sample_weights[df.label==idx] = weights[idx]
-    bas = balanced_accuracy_score(y_true=df.label,
-                                  y_pred=df.predicted_class,
-                                  sample_weight=sample_weights)
-    print(bas)
-    return {'balanced_accuracy': bas}
-
-
 def get_all_single_class_auprc_values(df):
     d = {}
     for class_ in df.label.unique():
         class_ = int(class_)
-        print('class {}'.format(class_))
+        #print('class {}'.format(class_))
         is_truly_class = df['label'] == class_
         df.loc[is_truly_class, 'temp_binary_truth'] = 1
         df.loc[~is_truly_class, 'temp_binary_truth'] = 0
@@ -80,27 +67,25 @@ def get_confusion_matrix(df):
 
 
 def visualize(df, pred_file):
-    df['slide_file'] = df['tile_file_name'].str.split('/').map(lambda x: str(x[0]) + '.svs')
-    # df = df.loc[df.groupby('slide_file')['pred_score'].nlargest(k).index.to_frame()[1].tolist()]
-    sub_dir = os.path.join('eval_visualizations', pred_file.replace('.csv', ''))
+    sub_dir = os.path.join('visualizations', pred_file.split('/')[-1].replace('.csv', ''))
     if not os.path.exists(sub_dir):
         os.mkdir(sub_dir)
 
-    Parallel(n_jobs=16)(delayed(_visualize)(slide_file, sub_df, sub_dir)
-                                for slide_file, sub_df in df.groupby('slide_file'))
+    if len(df) == 0:
+        return
 
-    # for slide_file, sub_df in df.groupby('slide_file'):
-    #     _visualize(slide_file, sub_df, sub_dir)
+    for image_path, sub_df in df.groupby('image_path'):
+        _visualize(image_path, sub_df, sub_dir)
 
 
-def _visualize(slide_file, sub_df, sub_dir):
+def _visualize(image_path, sub_df, sub_dir):
     desired_otsu_thumbnail_tile_size = 8 # 16
     scale_factor = config.args.tile_size / desired_otsu_thumbnail_tile_size
-    print(slide_file)
+    print(image_path)
     try:
-        slide = OpenSlide(os.path.join(config.args.wsi_dir, slide_file))
+        slide = OpenSlide(image_path)
     except OpenSlideUnsupportedFormatError:
-        print(os.path.join(config.args.wsi_dir, slide_file))
+        print(image_path)
         exit()
     slide_mag = general_utils.get_magnification(slide)
     if slide_mag != config.args.magnification:
@@ -125,45 +110,34 @@ def _visualize(slide_file, sub_df, sub_dir):
                                                      range_=[0, 3])
     thumbnail = Image.fromarray(thumbnail)
     thumbnail = label_image_tissue_type(thumbnail, map_reverse_key)
-    thumbnail.save('{}/{}_{}_eval.png'.format(sub_dir, slide_file, set_name))
+    thumbnail = add_scale_bar(thumbnail, scale, slide_mag)
+    thumbnail.save('{}/{}_{}_eval.png'.format(sub_dir, image_path.split('/')[-1], set_name))
 
 
 if __name__ == '__main__':
     all_preds = []
-    all_bas = []
-    for set_name, _pred_file in zip(['val', 'test', 'train'], [config.args.val_pred_file,
-                      config.args.test_pred_file, config.args.train_pred_file]):
-
-        if not _pred_file:
-            continue
+    all_acc = []
+    for set_name, _pred_file in zip(['val'], [config.args.val_pred_file]):
         for fold in range(config.args.crossval):
             pred_file = _pred_file.format(fold)
-            preds = pd.read_csv(os.path.join('predictions', pred_file))
+            preds = pd.read_csv(pred_file)
             preds = preds.set_index('tile_file_name')
-            n_classes = len(preds.columns) - 1
+            n_classes = 4
 
             results = {}
 
             if n_classes == 2:
                 results.update(get_auprc(preds))
                 results.update(get_random_auprc_from_df(preds))
-
+            print(preds)
             preds['predicted_class'] = preds.drop(columns='label').idxmax(axis='columns').str.replace(
                 'score_', '').astype(int)
             preds['certainty'] = preds.drop(columns=['label', 'predicted_class']).max(axis='columns')
 
             results.update(get_all_single_class_auprc_values(preds))
             results.update(get_accuracy(preds))
-            results.update(get_balanced_accuracy(preds))
-            all_bas.append(results['balanced_accuracy'])
-            # results.update(get_confusion_matrix(preds))
-
-            # plot confusion matrix
-            # cm = confusion_matrix(y_true=preds.label, y_pred=preds.predicted_class)
-            # disp = ConfusionMatrixDisplay(confusion_matrix=cm,
-            #                               display_labels=['Stroma', 'Tumor', 'Fat', 'Vessel', 'Necrosis'])
-            # disp.plot()
-            # plt.savefig()
+            all_acc.append(results['accuracy'])
+            
             map_key = {0: 'Stroma', 1: 'Tumor', 2: 'Fat', 3: 'Necrosis'}
             map_reverse_key = dict([(v, k) for k, v in map_key.items()])
             all_preds.append(preds)
@@ -171,18 +145,23 @@ if __name__ == '__main__':
                         y_pred=preds.predicted_class,
                         ymap=map_key,
                         labels=['Stroma', 'Tumor', 'Fat', 'Necrosis'],
-                        filename='evals/{}'.format(pred_file.replace('.csv', '_confusion.png')))
+                        filename='evals/{}'.format(pred_file.split('/')[-1].replace('.csv', '_confusion.png')))
 
-            with open('evals/{}'.format(pred_file.replace('.csv', '.txt')), 'w') as f:
+            with open('evals/{}'.format(pred_file.split('/')[-1].replace('.csv', '.txt')), 'w') as f:
                 json.dump(results, f)
             preds = preds.reset_index()
-            if True: #config.args.visualize:
-                visualize(preds, pred_file)
+            preds['image_id'] = preds['tile_file_name'].str.split('/').map(lambda x: str(x[0]))
+            df = pd.read_csv(config.args.preprocessed_cohort_csv_path)[['image_path']]
+            df['image_id'] = df['image_path'].str.split('/').map(lambda x: str(x[-1][:-4]))
+            df = df.set_index('image_id')
+            preds = preds.join(df, on='image_id', how='left').drop(columns=['image_id'])
+            visualize(preds, pred_file)
 
-    print('{:4.3f} +/- {:4.3f}'.format(np.mean(all_bas), np.std(all_bas)))
+    print('{:4.3f} +/- {:4.3f}'.format(np.mean(all_acc), np.std(all_acc)))
     all_preds = pd.concat(all_preds, axis=0)
+    all_preds.to_csv('evals/all_preds_{}'.format(config.args.val_pred_file.split('/')[-1].format('_all')))
     cm_analysis(y_true=all_preds.label,
                 y_pred=all_preds.predicted_class,
                 ymap=map_key,
                 labels=['Stroma', 'Tumor', 'Fat', 'Necrosis'],
-                filename='evals/integrated.png')
+                filename='evals/integrated.svg')

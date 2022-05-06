@@ -1,5 +1,6 @@
 import os
 import json
+import yaml
 import pandas as pd
 import numpy as np
 
@@ -37,11 +38,7 @@ def purple_score(tile_):
     assert isinstance(tile_, Image.Image)
     tile = np.array(tile_)
     r, g, b = tile[..., 0], tile[..., 1], tile[..., 2]
-    # cond1 = r > 75
-    # cond2 = b > 90
-    # score = np.sum(cond1 & cond2)
     score = np.sum((r > (g + 10)) & (b > (g + 10)))
-    # print(score)
     return score / tile.size
 
 
@@ -65,7 +62,9 @@ def score_tiles(otsu_img, rgb_img, tile_size):
 
     tile_x_count, tile_y_count = otsu_generator.level_tiles[otsu_generator_level]
     address_list = []
-    for address in itertools.product(range(tile_x_count), range(tile_y_count)):
+    for count, address in enumerate(itertools.product(range(tile_x_count), range(tile_y_count))):
+        if count > 1000 and len(address_list) > 10 and PROTOTYPE:
+            break
         dimensions = otsu_generator.get_tile_dimensions(otsu_generator_level, address)
         if not (dimensions[0] == tile_size) or not (dimensions[1] == tile_size):
             continue
@@ -106,7 +105,9 @@ def score_tiles_manual(ann_file_name, otsu_img, thumbnail, tile_size, overlap):
     tile_x_count, tile_y_count = generator.level_tiles[generator_level]
     print('{}, {}'.format(tile_x_count, tile_y_count))
     address_list = []
-    for address in itertools.product(range(tile_x_count), range(tile_y_count)):
+    for count, address in enumerate(itertools.product(range(tile_x_count), range(tile_y_count))):
+        if count > 1000 and len(address_list) > 10 and PROTOTYPE:
+            break
         dimensions = generator.get_tile_dimensions(generator_level, address)
         assert isinstance(tile_size, int)
         if dimensions[0] != (tile_size + 2*overlap) or dimensions[1] != (tile_size + 2*overlap):
@@ -156,39 +157,10 @@ def is_tile_in_annotations(tile_location, tile_size, slide_annotations):
     return 0
 
 
-def score_tiles_lab(thumbnail, tile_size):
-    assert isinstance(thumbnail, np.ndarray) and isinstance(tile_size, int)
-    im = rgb2lab(thumbnail)
-    ignore_map = ((im[:, :,0] < 50) & (np.abs(im[:,:,1] - im[:,:,2]) < 30)) | (im[:,:,2] < -40) | (im[:,:,0] > 90) | (im[:,:,1] > 40)
-    ignore_slide = general_utils.array_to_slide(ignore_map)
-    ignore_generator, ignore_generator_level = general_utils.get_full_resolution_generator(
-        ignore_slide, tile_size=tile_size)
-
-    tile_x_count, tile_y_count = ignore_generator.level_tiles[ignore_generator_level]
-    address_list = []
-    for address in itertools.product(range(tile_x_count), range(tile_y_count)):
-        dimensions = ignore_generator.get_tile_dimensions(ignore_generator_level, address)
-        if not (dimensions[0] == tile_size) or not (dimensions[1] == tile_size):
-            continue
-
-        ignore_tile = ignore_generator.get_tile(ignore_generator_level, address)
-        ignore_score = percent_otsu_score(ignore_tile)
-
-        if ignore_score > 0.25:
-            continue
-
-        address_list.append(address)
-
-    return address_list
-
-
-def get_slide_tile_addresses(wsi_dir, img_file_name, mag, scale, desired_tile_selection_size, index, tile_selection, annotation_dir, overlap, visualize=False):
+def get_slide_tile_addresses(image_path, mag, scale, desired_tile_selection_size, index, tile_selection, overlap, annotation_path=None, visualize=False):
     assert isinstance(overlap, int)
 
-    try:
-        slide = OpenSlide(img_file_name)
-    except OpenSlideUnsupportedFormatError:
-        slide = OpenSlide(os.path.join(wsi_dir, img_file_name))
+    slide = OpenSlide(image_path)
 
     slide_mag = general_utils.get_magnification(slide)
     scale = general_utils.adjust_scale_for_slide_mag(slide_mag=slide_mag, desired_mag=mag, scale=scale)
@@ -202,16 +174,12 @@ def get_slide_tile_addresses(wsi_dir, img_file_name, mag, scale, desired_tile_se
                                      tile_size=desired_tile_selection_size)
         tile_addresses = [[x, -1] for x in tile_addresses]  # for consistent formatting with manual
     elif tile_selection == 'manual':
-        tile_addresses = score_tiles_manual(os.path.join(annotation_dir, img_file_name + '.json'),
+        assert annotation_path is not None
+        tile_addresses = score_tiles_manual(annotation_path,
                                             otsu_thumbnail,
                                             thumbnail,
                                             tile_size=desired_tile_selection_size,
                                             overlap=overlap)
-    elif tile_selection == 'lab':
-        assert config.args.overlap == 0
-        tile_addresses = score_tiles_lab(thumbnail,
-                                            tile_size=desired_tile_selection_size)
-        tile_addresses = [[x, -1] for x in tile_addresses]  # for consistent formatting with manual
     else:
         raise RuntimeError
 
@@ -221,69 +189,59 @@ def get_slide_tile_addresses(wsi_dir, img_file_name, mag, scale, desired_tile_se
                                                    tile_addresses,
                                                    overlap=overlap)
         thumbnail = Image.fromarray(thumbnail)
-        try:
-            thumbnail.save('tiling_visualizations/{}_tiling.png'.format(img_file_name))
-        except FileNotFoundError:
-            thumbnail.save('tiling_visualizations/{}_tiling.png'.format(img_file_name.split('/')[-1]))
+        thumbnail.save('tiling_visualizations/{}_tiling.png'.format(image_path.split('/')[-1]))
     return {index: tile_addresses}
 
 
 if __name__ == '__main__':
-    prototype = False
+    PROTOTYPE = False
     visualize = False
     serial = False
 
     scale_factor = config.args.tile_size / config.desired_otsu_thumbnail_tile_size
 
     df = pd.read_csv(config.args.cohort_csv_path)
-    if 'img_hid' in df.columns:
-        df = df[~df.img_hid.isna()]
+    with open('../global_config.yaml', 'r') as f:
+        DIRECTORIES = yaml.safe_load(f)
+        DATA_DIR = DIRECTORIES['data_dir']
+    df['image_path'] = df['image_path'].apply(lambda x: os.path.join(DATA_DIR, x))
+    if 'segmentation_path' in df.columns:
+        df['segmentation_path'] = df['segmentation_path'].apply(lambda x: os.path.join(DATA_DIR, x))
 
-    if prototype:
-        df = df[df.img_hid == 'HobI20-681330526186.svs']
-        # df = df.head(32)
-
-    if 'slide_file_name' in df.columns:
-        key_col = 'slide_file_name'
-    else:
-        key_col = 'img_hid'
+    if PROTOTYPE:
+        df = df.head(4)
 
     coords = {}
     if serial:
-        for index, _img_file_name in df[key_col].iteritems():
-            print(_img_file_name)
-            tile_addresses = get_slide_tile_addresses(wsi_dir=config.args.wsi_dir,
-                                                      img_file_name=_img_file_name,
+        for index, row in df.iterrows():
+            print(row['image_path'])
+            tile_addresses = get_slide_tile_addresses(row['image_path'],
                                                       mag=config.args.magnification,
                                                       scale=scale_factor,
                                                       desired_tile_selection_size=
                                                       config.desired_otsu_thumbnail_tile_size,
                                                       index=index,
                                                       tile_selection=config.args.tile_selection_type,
-                                                      annotation_dir=config.args.annotation_dir,
                                                       overlap=config.args.overlap,
-                                                      visualize=visualize)
+                                                      visualize=visualize,
+                                                      annotation_path=row['segmentation_path'] if 'segmentation_path' in df.columns else None)
             coords.update(tile_addresses)
     else:
-        _dicts = Parallel(n_jobs=64)(delayed(get_slide_tile_addresses)(wsi_dir=config.args.wsi_dir,
-                                                      img_file_name=_img_file_name,
+        _dicts = Parallel(n_jobs=64)(delayed(get_slide_tile_addresses)(row['image_path'],
                                                       mag=config.args.magnification,
                                                       scale=scale_factor,
                                                       desired_tile_selection_size=
                                                       config.desired_otsu_thumbnail_tile_size,
                                                       index=index,
                                                       tile_selection=config.args.tile_selection_type,
-                                                      annotation_dir=config.args.annotation_dir,
                                                       overlap=config.args.overlap,
-                                                                       visualize=visualize)
-                                    for index, _img_file_name in df[key_col].iteritems())
+                                                                       visualize=visualize,
+                                                      annotation_path=row['segmentation_path'] if 'segmentation_path' in df.columns else None)
+                                    for index, row in df.iterrows())
         for _dict in _dicts:
             coords.update(_dict)
 
     df['tile_address'] = pd.Series(coords)
-    df['x'] = df['tile_address'].map(len)
-    # df = df[df.x > 0]
-    print(df)
+    df['n_foreground_tiles'] = df['tile_address'].map(len)
 
-    if not prototype:
-        df.to_csv(config.args.preprocessed_cohort_csv_path, index=False)
+    df.to_csv(config.args.preprocessed_cohort_csv_path, index=False)

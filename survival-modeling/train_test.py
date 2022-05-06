@@ -1,5 +1,4 @@
-from general import load_os, load_clin, load_pathomic_features, load_radiomic_features, load_genom, load_crs, load_all_mrns, load_pfs
-from select_features import preprocess_features, evaluate_features
+from utils import load_os, load_clin, load_pathomic_features, load_radiomic_features, load_genom, load_crs, load_all_ids, load_pfs
 from lifelines import KaplanMeierFitter, CoxPHFitter
 import pandas as pd
 import numpy as np
@@ -17,18 +16,25 @@ from joblib import Parallel, delayed
 from statsmodels.stats.multitest import multipletests
 from statannot import add_stat_annotation
 from scipy.stats import mannwhitneyu, kruskal, percentileofscore, rankdata, chi2_contingency
+import os
+import sys
+import yaml
+sys.path.append('../feature-selection')
+from select_features import preprocess_features, evaluate_features
+
+with open('../global_config.yaml', 'r') as f:
+    CONFIGS = yaml.safe_load(f)
+    DATA_DIR = CONFIGS['data_dir']
+    CODE_DIR = CONFIGS['code_dir']
 
 
-
-FONTSIZE = 8
+FONTSIZE = 7
 plt.rc('legend',fontsize=FONTSIZE-2, title_fontsize=FONTSIZE-2)
-plt.rc('xtick',labelsize=FONTSIZE-2)
-plt.rc('ytick',labelsize=FONTSIZE-2)
+plt.rc('xtick',labelsize=FONTSIZE)
+plt.rc('ytick',labelsize=FONTSIZE)
 plt.rc("axes", labelsize=FONTSIZE)
-plt.rc('font',**{'family':'sans-serif','sans-serif':['Arial']})
 
-
-def plot_genom_KM(df, plot_file_name, df_file_name=None, ylab="proportion (OS)"):
+def plot_genom_KM(df, plot_file_name, df_file_name=None, source_file_name=None, ylab="proportion (OS)"):
     median_surv_dict = {}
     mask_ = df.hrd_status
     results = logrank_test(df.loc[mask_, 'duration'],
@@ -36,7 +42,7 @@ def plot_genom_KM(df, plot_file_name, df_file_name=None, ylab="proportion (OS)")
                             df.loc[mask_, 'observed'],
                             df.loc[~mask_, 'observed'])
     kmf = KaplanMeierFitter()
-    fig = plt.figure(figsize=(2.5, 1.72), constrained_layout=True)
+    fig = plt.figure(figsize=(1.73, 1) if 'g.svg' not in plot_file_name else (2,2), constrained_layout=True)
 
     labels = ['HRD', 'HRP']
     colors = ['#005a8a', '#443500']
@@ -45,7 +51,7 @@ def plot_genom_KM(df, plot_file_name, df_file_name=None, ylab="proportion (OS)")
         kmf.fit(df.loc[mask, 'duration'].to_numpy().ravel(), df.loc[mask, 'observed'].to_numpy().ravel(), label='{} (n={})'.format(label, sum(mask)))
         median_surv_dict[label] = {'median_survival_time': kmf.median_survival_time_}
         # print('Median survival time for {}: {:4.1f} months'.format(label, kmf.median_survival_time_))
-        kmf.plot(ci_show=False, show_censors=False, color=color, linewidth=2, censor_styles={'alpha': 0.75, 'ms': 7})
+        kmf.plot(ci_show=False, show_censors=True, color=color, linewidth=1, censor_styles={'alpha': 0.75, 'ms': 4}) # linewidth=2
         plt.xlabel('time (m)')
         plt.ylabel(ylab)
     if results.p_value > 5e-4:
@@ -55,10 +61,12 @@ def plot_genom_KM(df, plot_file_name, df_file_name=None, ylab="proportion (OS)")
     plt.ylim(-0.05, 1.05)
     plt.gca().spines['right'].set_visible(False)
     plt.gca().spines['top'].set_visible(False)
-    plt.savefig(plot_file_name, dpi=300)
+    plt.savefig(plot_file_name, dpi=300 if '.png' in plot_file_name else None)
     plt.close()
     if df_file_name:    
         pd.DataFrame(median_surv_dict).T.reset_index().rename(columns={'index': 'risk_group'}).to_csv(df_file_name, index=False)
+    if source_file_name:
+        df[['hrd_status', 'observed', 'duration']].to_csv(source_file_name, index=False)
 
 
 def calc_c_dev(x,y, col):
@@ -67,11 +75,11 @@ def calc_c_dev(x,y, col):
     return np.abs(c - 0.5)
 
 def split_train_test(df):
-    test_mrns = pd.read_csv('/Users/boehmk/shahLab/thesis/reanalysis/features/test_mrns.csv')['mrn'].astype(str)
-    train_mrns = pd.read_csv('/Users/boehmk/shahLab/thesis/reanalysis/features/train_mrns.csv')['mrn'].astype(str)
-    assert not set(train_mrns).intersection(set(test_mrns))
-    test_df = df[df.index.isin(test_mrns)]
-    train_df = df[df.index.isin(train_mrns)]
+    test_ids = pd.read_csv(os.path.join(DATA_DIR, 'data', 'dataframes', 'test_ids.csv'))['Patient ID'].astype(str)
+    train_ids = pd.read_csv(os.path.join(DATA_DIR, 'data', 'dataframes', 'train_ids.csv'))['Patient ID'].astype(str)
+    assert not set(train_ids).intersection(set(test_ids))
+    test_df = df[df.index.isin(test_ids)]
+    train_df = df[df.index.isin(train_ids)]
     return train_df, test_df
 
 def encode_clinical_features(train_df, test_df):
@@ -217,7 +225,7 @@ def train(X, y, feat_acronym, penalty=0.5, make_forest_plot=True):
     model = CoxPHFitter(penalizer=penalty, l1_ratio=0)
     model.fit(X.join(y, how='inner'), duration_col='duration', event_col='observed', robust=True)
     if make_forest_plot:
-        make_forest_plot_(model.summary, 'figures/forest_plots/forest_{}.png'.format(feat_acronym))
+        make_forest_plot_(model.summary, 'figures/forest_plots/forest_{}.svg'.format(feat_acronym))
         model.summary.to_csv('results/model_summaries/{}_summary.csv'.format(feat_acronym))
     return model
 
@@ -230,7 +238,7 @@ def train_stratified(X, y, feat_acronym, penalty=0.5):
     model = CoxPHFitter(penalizer=penalty, l1_ratio=0)
     model.fit(df, duration_col='duration', event_col='observed', strata=strata, robust=True)
     # if not ((len(strata) == 2) and (len(feat_acronym) == 2)):
-    make_forest_plot_(model.summary, 'figures/forest_plots/forest_{}.png'.format(feat_acronym))
+    make_forest_plot_(model.summary, 'figures/forest_plots/forest_{}.svg'.format(feat_acronym))
 
     return model
 
@@ -245,9 +253,10 @@ def make_forest_plot_(summary, output_file_name):
         summary['abbreviated_feature'] = summary['abbreviated_feature'].apply(lambda x: '_'.join([x.split('_')[0], x.split('_')[-1]]))
         fig_len = 2.75
     elif summary.index.str.contains('Tumor').any():
-        summary['abbreviated_feature'] = summary.index.str.replace('Tumor_Other_mean_nuclear_area', 'Mean tumor nuclear area')
+        summary['abbreviated_feature'] = summary.index.str.replace('Tumor_Other_mean_nuclear_area', 'Mean tumor nuc. area')
+        summary['abbreviated_feature'] = summary['abbreviated_feature'].str.replace('Stroma_major_axis_length', 'Stroma maj. axis len.')
         summary = summary.sort_values(by=['abbreviated_feature'], ascending=True)
-        fig_len = 2.75
+        fig_len = 1.97
     else:
         summary['abbreviated_feature'] = summary.index
         fig_len  = 2
@@ -265,7 +274,7 @@ def make_forest_plot_(summary, output_file_name):
     plt.axvline(x=0, color='.2', linestyle=':', linewidth=1.0)
     plt.ylabel('')
     plt.xlabel('')
-    plt.savefig(output_file_name, dpi=300)
+    plt.savefig(output_file_name, dpi=300 if '.svg' not in output_file_name else None)
     plt.close()
     plt.rc('ytick',labelsize=FONTSIZE-2)
 
@@ -292,7 +301,7 @@ def bootstrap_c(df_, score_col):
                           predicted_scores=df[score_col],
                           event_observed=df['observed'])
 
-def c_index(X, y, score_col='score', label='G train', n_bootstraps=10):
+def c_index(X, y, score_col='score', label='G train', n_bootstraps=100):
     df = X.join(y, how='inner').dropna()
     df[score_col] = df[score_col].astype(int)
     c = concordance_index(event_times=df['duration'],
@@ -312,16 +321,16 @@ def plot_features(X, y, feats):
         # print(df[feat].value_counts())
         # exit()
         fig = plt.figure(figsize=(3, 1.5), constrained_layout=True)
-        sns.regplot(data=df, x=feat, y='duration',
-                    scatter=False, color='.2',
-                    line_kws={'linewidth':1},
-                    ci=95)
+        # sns.regplot(data=df, x=feat, y='duration',
+        #             scatter=False, color='.2',
+        #             line_kws={'linewidth':1},
+        #             ci=95)
         sns.scatterplot(data=df, x=feat, y='duration',
                         hue='observed', palette=['#d2b04c', '#8f4cd2'],
                         style='observed', markers={True: '+', False: '+'},
-                        alpha=0.6,
+                        alpha=0.7,
                         legend='full',
-                        s=10)
+                        s=12)
         # sns.kdeplot(
         #     data=df,
         #     x=feat,
@@ -336,7 +345,8 @@ def plot_features(X, y, feats):
         plt.xlabel(feat.replace('wavelet-HLL_glcm_Autocorrelation', 'HLL Autocorrelation'))
         plt.gca().spines['right'].set_visible(False)
         plt.gca().spines['top'].set_visible(False)
-        plt.savefig('figures/feature_plots/{}.png'.format(feat), dpi=300)
+        # plt.savefig('figures/feature_plots/{}.png'.format(feat), dpi=300)
+        plt.savefig('figures/feature_plots/{}.svg'.format(feat))
         plt.close()
 
 def _calc_logrank_p_for_quantile(quant, df_):
@@ -365,6 +375,7 @@ def plot_halves_km(df, plot_filename, df_filename, benchmark_df, ylab, width, he
     # brightline = benchmark_df.score.quantile(0.5)
     df.loc[df.score < brightline, 'risk group'] = 'higher risk'
     df.loc[df.score >= brightline, 'risk group'] = 'lower risk'
+    df.to_csv(df_filename.replace('results/', 'results/scores-'))
 
     p = multivariate_logrank_test(df['duration'], df['risk group'], df['observed']).p_value
 
@@ -389,7 +400,7 @@ def plot_halves_km(df, plot_filename, df_filename, benchmark_df, ylab, width, he
     if 'GRH' in plot_filename and 'GRHC' not in plot_filename and 'pfs' not in plot_filename:
         pval_yloc = 0.4
     else:
-        pval_yloc = 0.2
+        pval_yloc = 0.25
 
     plt.gca().set_ylim(-0.05, 1.05)
     if p > 5e-4:
@@ -398,88 +409,9 @@ def plot_halves_km(df, plot_filename, df_filename, benchmark_df, ylab, width, he
         plt.text(0, pval_yloc, 'p < 5e-4', fontsize=FONTSIZE)
     plt.gca().spines['right'].set_visible(False)
     plt.gca().spines['top'].set_visible(False)
-    plt.savefig(plot_filename, dpi=300)
+    plt.savefig(plot_filename, dpi=300 if '.svg' not in plot_filename else None)
     pd.DataFrame(median_surv_dict).T.reset_index().rename(columns={'index': 'risk_group'}).to_csv(df_filename, index=False)
     plt.close()
-    # print('--')
-
-# def _calc_logrank_p_for_two_quantiles(quant1, quant2, df_):
-#     df = df_.copy()
-#     thresh1 = df.score.quantile(quant1)
-#     thresh2 = df.score.quantile(quant2)
-#     df.loc[df.score < thresh1, 'risk group'] = 'higher risk'
-#     df.loc[df.score >= thresh2, 'risk group'] = 'lower risk'
-#     df.loc[df['risk group'].isna(), 'risk group'] = 'intermediate risk'
-
-#     low_mask = df['risk group'] == 'lower risk'
-#     med_mask = df['risk group'] == 'intermediate risk'
-#     high_mask = df['risk group'] == 'higher risk'
-    
-#     if (low_mask.sum() == 0) or (med_mask.sum() == 0) or (high_mask.sum() == 0):
-#         return 1.0
-
-#     kmf = KaplanMeierFitter()
-#     low_risk_med_surv = kmf.fit(df.loc[low_mask, 'duration'],
-#                                 df.loc[low_mask, 'observed']).median_survival_time_
-#     med_risk_med_surv = kmf.fit(df.loc[med_mask, 'duration'],
-#                                 df.loc[med_mask, 'observed']).median_survival_time_
-#     high_risk_med_surv = kmf.fit(df.loc[high_mask, 'duration'],
-#                                  df.loc[high_mask, 'observed']).median_survival_time_
-
-#     if low_risk_med_surv < med_risk_med_surv:
-#         return 1.0
-#     if low_risk_med_surv < high_risk_med_surv:
-#         return 1.0
-#     if med_risk_med_surv < high_risk_med_surv:
-#         return 1.0
-
-#     return multivariate_logrank_test(df['duration'], df['risk group'], df['observed']).p_value
-
-# def calc_threshold_that_maximizes_three_group_separation(df_):
-#     quantiles = np.arange(0.2, 0.85, 0.05)
-#     quantile_sets = list(product(quantiles, quantiles))
-#     quantile_sets = [x for x in quantile_sets if x[1] > x[0]]
-#     p_values = np.array(Parallel(n_jobs=-1)(delayed(_calc_logrank_p_for_two_quantiles)(quant1, quant2, df_) for quant1, quant2 in quantile_sets))
-#     arg_min = np.argmin(p_values)
-#     quantile1, quantile2 = quantile_sets[arg_min]
-#     best_thresh1, best_thresh2 = df_.score.quantile(quantile1), df_.score.quantile(quantile2)
-#     return best_thresh1, best_thresh2
-
-def plot_tertiles_km(df, plot_filename, df_filename, benchmark_df, ylab):
-    median_surv_dict = {}
-
-    if benchmark_df is None:
-        benchmark_df = df
-    brightline1 = benchmark_df.score.quantile(0.333)
-    brightline2 = benchmark_df.score.quantile(0.667)
-    # brightline1, brightline2 = calc_threshold_that_maximizes_three_group_separation(benchmark_df)
-
-    df.loc[df.score < brightline1, 'risk group'] = 'higher risk'
-    df.loc[df.score >= brightline2, 'risk group'] = 'lower risk'
-    df.loc[df['risk group'].isna(), 'risk group'] = 'intermediate risk'
-
-    p = multivariate_logrank_test(df['duration'], df['risk group'], df['observed']).p_value
-
-    kmf = KaplanMeierFitter()
-
-    color_map = {'lower risk': '#000078', 'intermediate risk': '#005900', 'higher risk': '#8a034f'}
-    fig = plt.figure(figsize=(2.25, 2), constrained_layout=True)
-    plt.rcParams["axes.labelsize"] = FONTSIZE
-    for risk_group, sub_df in df.groupby('risk group'):
-        kmf.fit(sub_df['duration'], sub_df['observed'], label='{} (n={})'.format(risk_group, len(sub_df)))
-        median_surv_dict[risk_group] = {'median_survival_time': kmf.median_survival_time_}
-        kmf.plot(ci_show=False, show_censors=True, color=color_map[risk_group], linewidth=2)
-    plt.xlabel('time (m)')
-    plt.ylabel(ylab)
-    plt.gca().set_ylim(-0.05, 1.05)
-    if p > 5e-4:
-        plt.text(0, 0.2, 'p = {:4.3f}'.format(p), fontsize=FONTSIZE)
-    else:
-        plt.text(0, 0.2, 'p < 5e-4', fontsize=FONTSIZE)
-    plt.savefig(plot_filename, dpi=300)
-    pd.DataFrame(median_surv_dict).T.reset_index().rename(columns={'index': 'risk_group'}).to_csv(df_filename, index=False)
-    plt.close()
-    # print('--')
 
 def make_km_plots(scores_dict, outcomes, file_name_prefix, benchmark_scores_dict=None, ylab='proportion (OS)'):
     for feat_combo, score_df in scores_dict.items():
@@ -491,15 +423,9 @@ def make_km_plots(scores_dict, outcomes, file_name_prefix, benchmark_scores_dict
         else:
             benchmark_df = None
 
-        # if feat_combo not in ['G', 'C']:
-        #     plot_tertiles_km(df,
-        #                      'figures/km_plots/{}_km_{}.png'.format(file_name_prefix + 'tertiles', feat_combo),
-        #                      'results/{}_{}_3groups_survival.csv'.format(file_name_prefix, feat_combo),
-        #                      benchmark_df,
-        #                      ylab=ylab)
         if feat_combo != 'G':
-            plot_halves_km(df,
-                           'figures/km_plots/{}_km_{}.png'.format(file_name_prefix + 'halves', feat_combo),
+            plot_halves_km(df.dropna(),
+                           'figures/km_plots/{}_km_{}.svg'.format(file_name_prefix + 'halves', feat_combo), # .png
                            'results/{}_{}_2groups_survival.csv'.format(file_name_prefix, feat_combo),
                            benchmark_df,
                            ylab=ylab,
@@ -527,16 +453,14 @@ def make_unimodal_c_barplots(train_df_, test_df_):
         ax.axhline(0.5, color='k', linestyle='dashed', linewidth=1.0)
         # plt.setp(ax.get_xticklabels(), ha="right", rotation=45)
         y_lower_lim = min(0.49, (plotting_df['c'] - plotting_df['lower_ci']).min() - 0.01)
-        y_upper_lim = (plotting_df['c'] + plotting_df['upper_ci']).max() + 0.02
-        # for i, (_, row) in enumerate(plotting_df.iterrows()):
-        #     if row['permutation_p'] <= 0.05:
-        #         plt.text(i-0.29, row['c'] + row['upper_ci'], '*', fontsize=FONTSIZE, color='.2')
+        y_upper_lim = (plotting_df['c'] + plotting_df['upper_ci']).max() + 0.01
         ax.set_ylim(y_lower_lim, y_upper_lim)
         plt.setp(ax.get_xticklabels(), ha="right", rotation=45)
         plt.xlabel('')
+        plt.ylabel('c-Index')
         plt.gca().spines['right'].set_visible(False)
         plt.gca().spines['top'].set_visible(False)
-        plt.savefig('figures/barplots/{}_c_barplot.png'.format(modalities.replace('\n', '')), dpi=300)
+        plt.savefig('figures/barplots/{}_c_barplot.svg'.format(modalities.replace('\n', '')))
     plt.rc('xtick',labelsize=FONTSIZE-2)
     plt.close()
 
@@ -560,9 +484,11 @@ def make_c_barplot(plotting_df, file_name_prefix):
             plt.text(i-0.29, row['c'] + row['upper_ci'], '*', fontsize=FONTSIZE, color='.2')
     ax.set_ylim(y_lower_lim, y_upper_lim)
     plt.xlabel('')
+    plt.ylabel('c-Index')
     plt.gca().spines['right'].set_visible(False)
     plt.gca().spines['top'].set_visible(False)
-    plt.savefig('figures/barplots/{}_c_barplot.png'.format(file_name_prefix), dpi=300)
+    plt.savefig('figures/barplots/{}_c_barplot.svg'.format(file_name_prefix))
+    # plt.savefig('figures/barplots/{}_c_barplot.png'.format(file_name_prefix), dpi=300)
     plotting_df['model'] = plotting_df['model'].apply(lambda x: x.replace('\n', ''))
     plotting_df['lower_bound'] = plotting_df['c'] - plotting_df['lower_ci']
     plotting_df['upper_bound'] = plotting_df['c'] + plotting_df['upper_ci']
@@ -582,12 +508,12 @@ def make_crs_plot(df, output_file_name, n_classes):
     ax = plt.gca()
     sns.boxplot(data=df, x='CRS', y='score', showfliers=False, palette='mako', order=order, linewidth=0.5, ax=ax)
     sns.swarmplot(data=df, x='CRS', y='score', color=".2", order=order, sizes=[2]*len(df), ax=ax)
-
+    #print(output_file_name)
     if n_classes == 2:
         add_stat_annotation(ax, data=df, x='CRS', y='score', order=order,
                         box_pairs=[("1/2", "3/NET")],
                         perform_stat_test=False, pvalues=[mannwhitneyu(df.loc[df['CRS'] == "1/2", 'score'], df.loc[df['CRS'] == "3/NET", 'score'], alternative='less').pvalue],
-                         text_format='star', loc='outside', verbose=2) # test='Mann-Whitney', comparisons_correction=None,
+                         text_format='star', loc='outside', verbose=0) # test='Mann-Whitney', comparisons_correction=None,
     else:
         p = kruskal(*[df.loc[df['CRS'] == CRS, 'score'].values.ravel() for CRS in order]).pvalue
         plt.text(1, df.score.max() + 0.1, "P={:4.3f}".format(p), fontsize=FONTSIZE-1)
@@ -595,43 +521,21 @@ def make_crs_plot(df, output_file_name, n_classes):
         plt.tight_layout()
     plt.gca().spines['right'].set_visible(False)
     plt.gca().spines['top'].set_visible(False)
-    plt.savefig(output_file_name, dpi=300)
+    plt.savefig(output_file_name, dpi=300 if '.svg' not in output_file_name else None)
     plt.close()
 
 def make_crs_plots(scores_dict, file_name_prefix):
-    binarize = True
-    crs_scores = load_crs(binarize=binarize)
+    crs_scores = load_crs(binarize=True)
+    #print(crs_scores)
     for feat_combo, score_df in scores_dict.items():
         df = score_df.rename(columns={'{}_score'.format(feat_combo): 'score'})
         df.score = df.score.astype(float)
         df = df.join(crs_scores, how='inner')
-        print('{}: {} cases'.format(feat_combo, len(df)))
+        df.to_csv('results/crs/{}_crs_{}.csv'.format(file_name_prefix, feat_combo))
+        #print('{}: {} cases'.format(feat_combo, len(df)))
         make_crs_plot(df,
-                      'figures/crs_plots/{}_crs_{}.png'.format(file_name_prefix, feat_combo),
-                      n_classes=2 if binarize else 4)
-
-def make_crs_plots_chi(scores_dict, file_name_prefix, outcomes, benchmark_scores_dict=None):
-    binarize = True
-    crs_scores = load_crs(binarize=binarize)
-    for feat_combo, score_df in scores_dict.items():
-        df = score_df.rename(columns={'{}_score'.format(feat_combo): 'score'}).join(outcomes, how='inner')
-        df['score'] = df['score'].astype(float)
-
-        if benchmark_scores_dict:
-            benchmark_df = benchmark_scores_dict[feat_combo].rename(columns={'{}_score'.format(feat_combo): 'score'}).join(outcomes, how='inner')
-            benchmark_df['score'] = benchmark_df['score'].astype(float)
-        else:
-            benchmark_df = df
-
-        brightline = calc_threshold_that_maximizes_two_group_separation(benchmark_df)
-
-        df.loc[df.score < brightline, 'risk group'] = 'higher risk'
-        df.loc[df.score >= brightline, 'risk group'] = 'lower risk'
-
-        df = df.join(crs_scores, how='inner')
-        contingency = pd.crosstab(df['risk group'], df['CRS'])
-        _, p, _, _ = chi2_contingency(contingency)
-        print('{}: {:3.2f}'.format(feat_combo, p))
+                      'figures/crs_plots/{}_crs_{}.svg'.format(file_name_prefix, feat_combo), #.png
+                      n_classes=2)
 
 
 def make_multimodal_correlation_plot(scores, file_name_prefix, method='kendall'):
@@ -652,7 +556,8 @@ def make_multimodal_correlation_plot(scores, file_name_prefix, method='kendall')
     fig, ax = plt.subplots(figsize=(2.17,2.17), constrained_layout=True)
     sns.heatmap(df, mask=mask, square=True, linewidths=.5, cbar_kws={"shrink": .4}, ax=ax)
     # plt.tight_layout()
-    plt.savefig('figures/multimodal/{}_corr.png'.format(file_name_prefix), dpi=300)
+    # plt.savefig('figures/multimodal/{}_corr.png'.format(file_name_prefix), dpi=300)
+    plt.savefig('figures/multimodal/{}_corr.svg'.format(file_name_prefix))
     df.to_csv('results/{}_corr.csv'.format(file_name_prefix))
     plt.close()
 
@@ -673,14 +578,16 @@ def plot_unimodal_scores(scores_dict, outcomes, file_name_prefix):
 
     df = df[[h_col, r_col, 'genomic type', 'duration']]
 
-    df['PFS percentile'] = df.duration.apply(lambda x: percentileofscore(df.duration, x))
+    df['OS percentile'] = df.duration.apply(lambda x: percentileofscore(df.duration, x))
+    df.to_csv('results/{}_unimodal_scores.csv'.format(file_name_prefix))
     fig = plt.figure(figsize=(3.35, 1.88), constrained_layout=True)
-    sns.scatterplot(data=df, x=h_col, y=r_col, style='genomic type', hue='PFS percentile', palette='vlag_r', edgecolor="0.2", alpha=0.8, sizes=[12.]*len(df),
+    sns.scatterplot(data=df, x=h_col, y=r_col, style='genomic type', hue='OS percentile', palette='vlag_r', edgecolor="0.2", alpha=0.8, sizes=[10.]*len(df),
         markers = {'HRD': 'o', 'HRP': 's'})
     plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
     plt.gca().spines['right'].set_visible(False)
     plt.gca().spines['top'].set_visible(False)
-    plt.savefig('figures/multimodal/{}_scores.png'.format(file_name_prefix), dpi=300)
+    # plt.savefig('figures/multimodal/{}_scores.png'.format(file_name_prefix), dpi=300)
+    plt.savefig('figures/multimodal/{}_scores.svg'.format(file_name_prefix))
     plt.close()
 
 def train_multimodal(feature_set, multimodal_train_features, multimodal_test_features, strategy):
@@ -762,23 +669,25 @@ if __name__ == '__main__':
 
 ###### GENOMIC ###
     genomic_features = load_genom()
-    genomic_features = genomic_features.loc[genomic_features.index.isin(load_all_mrns(imaging_only=True))]
+    #genomic_features = genomic_features.loc[genomic_features.index.isin(load_all_ids(imaging_only=True))]
     train_genomic_features, test_genomic_features = split_train_test(genomic_features)
+
 
     # plot KM by HRD status alone
     plot_genom_KM(genomic_features.join(survival_outcomes, how='inner'),
-                  'figures/km_plots/observedOnly_km_both_g.png',
-                  'results/observedOnly_both_G_2groups_survival.csv',
+                  'figures/km_plots/km_both_g.svg',
+                  'results/both_G_2groups_survival.csv',
                   ylab="proportion (OS)")
     plot_genom_KM(train_genomic_features.join(survival_outcomes, how='inner'),
-                  'figures/km_plots/km_train_g.png',
+                  'figures/km_plots/km_train_g.svg',
                   'results/train_G_2groups_survival.csv',
-                  ylab="proportion (OS)")
+                  ylab="proportion (OS)",
+                  source_file_name=None)#'/Users/boehmk/shahLab/thesis/manuscript_submission/editorial edits/Source Data/assembly/Ex2d.csv')
     plot_genom_KM(test_genomic_features.join(survival_outcomes, how='inner'),
-                  'figures/km_plots/km_test_g.png',
+                  'figures/km_plots/km_test_g.svg',
                   'results/test_G_2groups_survival.csv',
-                  ylab="proportion (OS)")
-    # exit()
+                  ylab="proportion (OS)",
+                  source_file_name=None)#'/Users/boehmk/shahLab/thesis/manuscript_submission/editorial edits/Source Data/assembly/Ex2e.csv')
 
     # evaluate
     train_scores['G'] = train_genomic_features.rename(columns={'hrd_status': 'G_score'})
@@ -799,12 +708,12 @@ if __name__ == '__main__':
     # select features
     radiomic_features = select_imaging_features(train_radiomic_features,
                                                 survival_outcomes,
-                                                pd.read_csv('features/hr_ct_features_omentum.csv'),
-                                                filter_='wavelet|log-1|log-3',
+                                                pd.read_csv(os.path.join(CODE_DIR, 'code', 'feature-selection', 'results', 'hr_ct_features_omentum.csv')),
+                                                filter_='wavelet',
                                                 remove_filter='firstorder',
                                                 thresh=0.05,
                                                 modality='radiology')
-                                                # use_corrected=False) #CHANGED 13/12/2021
+    #print(radiomic_features)
     plot_features(train_radiomic_features, survival_outcomes, radiomic_features)
     train_radiomic_features = train_radiomic_features[radiomic_features]
     test_radiomic_features = test_radiomic_features[radiomic_features]
@@ -830,11 +739,12 @@ if __name__ == '__main__':
     # select features
     pathomic_features = select_imaging_features(train_pathomic_features,
                                                 survival_outcomes,
-                                                pd.read_csv('features/hr_hne_features.csv'),
+                                                pd.read_csv(os.path.join(CODE_DIR, 'code', 'feature-selection', 'results', 'hr_hne_features.csv')),
                                                 thresh=0.05,
                                                 modality='pathology',
                                                 filter_='Stroma|Tumor|Necrosis',
                                                 use_corrected=False)
+    #print(pathomic_features)
     plot_features(train_pathomic_features, survival_outcomes, pathomic_features)
     train_pathomic_features = train_pathomic_features[pathomic_features]
     test_pathomic_features = test_pathomic_features[pathomic_features]
@@ -851,22 +761,11 @@ if __name__ == '__main__':
     test_c['H'] = c_index(X=test_scores['H'], y=survival_outcomes, score_col='H_score', label='H test')
     pfs_test_c['H'] = c_index(X=test_scores['H'], y=pfs, score_col='H_score', label='H test')
 
-
 ###### CLINICAL ###
-    clin = load_clin(cols=['cgr', 'stage', 'age', 'Type of surgery', 'adnexal_lesion', 'omental_lesion', 'parp_nact'])#, 'date_diagnosis'
-    clin = clin.loc[clin.index.isin(load_all_mrns(True))]
+    clin = load_clin(cols=['Complete gross resection', 'stage', 'age', 'Type of surgery', 'adnexal_lesion', 'omental_lesion', 'Received PARPi'])#, 'date_diagnosis'
+    #clin = clin.loc[clin.index.isin(load_all_ids(True))]
     train_clinical_features, test_clinical_features = split_train_test(clin)
 
-    # print(clin)
-    # clin = clin[~clin.index.str.contains("TCGA")]
-    # print(clin['parp_nact'].value_counts(dropna=False))
-    # clin['parp_nact'] = clin['parp_nact'].fillna(False)
-    # clin['date_diagnosis'] = pd.to_datetime(clin['date_diagnosis'])
-    # print(clin.loc[clin.parp_nact, 'date_diagnosis'])
-    # print(clin.loc[~clin.parp_nact, 'date_diagnosis'].min())
-    # print(clin.loc[~clin.parp_nact, 'date_diagnosis'].max())
-    # exit()
-    # encode clinical_features
     train_clinical_features, test_clinical_features = encode_clinical_features(train_clinical_features, test_clinical_features)
 
     # scale clinical features
@@ -876,8 +775,8 @@ if __name__ == '__main__':
     clinical_feats = select_clinical_features(train_clinical_features, survival_outcomes, threshold=0.05) #CHANGED 13/12/2021
     train_clinical_features = train_clinical_features[clinical_feats].dropna()
     test_clinical_features = test_clinical_features[clinical_feats].dropna()
-    print(clinical_feats)
-    # exit()
+    #print(clinical_feats)
+    
     # train clinical model
     clinical_model = train(train_clinical_features, survival_outcomes, 'C')
 
@@ -926,15 +825,12 @@ if __name__ == '__main__':
 
 ###### PLOTS AND RESULTS ###
     # test CRS correspondence
-    # make_crs_plots_chi(test_scores, 'test_', survival_outcomes, benchmark_scores_dict=train_scores)
-    # make_crs_plots_chi(train_scores, 'train_', survival_outcomes)
-    make_crs_plots(test_scores, 'test_')
-    make_crs_plots(train_scores, 'train_')
-    all_scores = {}
-    for key in train_scores.keys():
-        all_scores[key] = pd.concat([train_scores[key], test_scores[key]], axis=0)
-    # make_crs_plots_chi(all_scores, 'all_', survival_outcomes, benchmark_scores_dict=train_scores)
-    make_crs_plots(all_scores, 'all_')
+    make_crs_plots(train_scores, 'train')
+    make_crs_plots(test_scores, 'test')
+    #all_scores = {}
+    #for key in train_scores.keys():
+    #    all_scores[key] = pd.concat([train_scores[key], test_scores[key]], axis=0)
+    #make_crs_plots(all_scores, 'all_')
 
     # make c-index barplots for PFS
     pfs_train_c = convert_to_df(pfs_train_c, 'train')
@@ -942,16 +838,16 @@ if __name__ == '__main__':
     make_c_barplot(pfs_train_c, 'pfs_train')
     make_c_barplot(pfs_test_c, 'pfs_test')
 
-    # make PFS KM plots
-    make_km_plots(test_scores, pfs, 'pfs_test_', benchmark_scores_dict=train_scores, ylab='proportion (PFS)')
-    make_km_plots(train_scores, pfs, 'pfs_train_', ylab='proportion (PFS)')
-
     # make c-index barplots for OS
     train_c = convert_to_df(train_c, 'train')
     test_c = convert_to_df(test_c, 'test')
     make_unimodal_c_barplots(train_c, test_c)
     make_c_barplot(train_c, 'train')
     make_c_barplot(test_c, 'test')
+
+    # make PFS KM plots
+    make_km_plots(test_scores, pfs, 'pfs_test_', benchmark_scores_dict=train_scores, ylab='proportion (PFS)')
+    make_km_plots(train_scores, pfs, 'pfs_train_', ylab='proportion (PFS)')
 
     # make OS KM plots
     make_km_plots(test_scores, survival_outcomes, 'test_', benchmark_scores_dict=train_scores)
@@ -962,7 +858,10 @@ if __name__ == '__main__':
     make_multimodal_correlation_plot(train_scores, 'train')
     make_multimodal_correlation_plot(test_scores, 'test_spearman', method='spearman')
     make_multimodal_correlation_plot(test_scores, 'test_pearson', method='pearson')
+    make_multimodal_correlation_plot(train_scores, 'train_spearman', method='spearman')
+    make_multimodal_correlation_plot(train_scores, 'train_pearson', method='pearson')
 
     # plot unimodal scores
     plot_unimodal_scores(test_scores, survival_outcomes, 'test')
     plot_unimodal_scores(train_scores, survival_outcomes, 'train')
+

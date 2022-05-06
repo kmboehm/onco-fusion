@@ -2,6 +2,7 @@ import general_utils
 import config
 import os
 import numpy as np
+import yaml
 
 from PIL import Image
 from openslide import OpenSlide
@@ -14,13 +15,9 @@ from general_utils import make_otsu
 
 
 # normalization tools from https://github.com/CODAIT/deep-histopath/blob/master/deephistopath/preprocessing.py
-# stain_ref = (np.array([0.54598845, 0.322116, 0.72385198, 0.76419107, 0.42182333, 0.55879629])
-#              .reshape(3, 2))
 stain_ref = np.array([[0.56237296, 0.38036293],
        [0.72830425, 0.83254214],
        [0.39154767, 0.40273766]])
-#
-# max_sat_ref = np.array([0.82791151, 0.61137274]).reshape(2, 1)
 max_sat_ref = np.array([[0.62245465],
        [0.44427557]])
 
@@ -29,7 +26,7 @@ alpha = 1
 light_intensity = 255
 
 
-# https://github.com/Peter554/StainTools/blob/master/staintools/preprocessing/luminosity_standardizer.py
+# credit: StainTools (https://github.com/Peter554/StainTools/blob/master/staintools/preprocessing/luminosity_standardizer.py)
 def get_standard_luminosity_limit(rgb):
     assert isinstance(rgb, np.ndarray)
     lab = rgb2lab(rgb)
@@ -37,13 +34,14 @@ def get_standard_luminosity_limit(rgb):
     return p
 
 
+# credit: StainTools (https://github.com/Peter554/StainTools/blob/master/staintools/preprocessing/luminosity_standardizer.py)
 def apply_standard_luminosity_limit(rgb, p):
     assert isinstance(rgb, np.ndarray)
     lab = rgb2lab(rgb)
     lab[:, :, 0] = np.clip(100 * lab[:, :, 0] / p, 0, 100)
     return np.round(np.clip(255 * lab2rgb(lab), 0, 255)).astype(np.uint8)
 
-
+# credit: StainTools (https://github.com/Peter554/StainTools/blob/master/staintools/preprocessing/luminosity_standardizer.py)
 def calculate_macenko_transform(to_transform):
     assert isinstance(to_transform, np.ndarray)
 
@@ -53,15 +51,9 @@ def calculate_macenko_transform(to_transform):
     luminosity_limit = get_standard_luminosity_limit(to_transform)
     to_transform = apply_standard_luminosity_limit(to_transform, luminosity_limit)
 
-    # otsu_mask = make_otsu(to_transform, scale=1.25).astype(bool)
-    # not_pen_mask = rgb2lab(to_transform)[:,:,0] > 30
-    # use_mask = np.logical_and(otsu_mask.astype(bool), not_pen_mask)
-
     im = rgb2lab(to_transform)
     ignore_mask = ((im[:, :,0] < 50) & (np.abs(im[:,:,1] - im[:,:,2]) < 30)) | (im[:,:,2] < -40) | (im[:,:,0] > 90) | (im[:,:,1] > 40)
     to_transform = to_transform[~ignore_mask, :]
-
-    # to_transform = to_transform[otsu_mask]
 
     to_transform = to_transform.reshape(-1, c).astype(np.float64)  # shape (H*W, C)
 
@@ -119,6 +111,7 @@ def calculate_macenko_transform(to_transform):
     return stains, max_sat, luminosity_limit
 
 
+# credit: StainTools (https://github.com/Peter554/StainTools/blob/master/staintools/preprocessing/luminosity_standardizer.py)
 def apply_macenko_transform(stains, max_sat, luminosity_limit, to_transform):
     assert isinstance(to_transform, np.ndarray)
 
@@ -162,22 +155,17 @@ def apply_macenko_transform(stains, max_sat, luminosity_limit, to_transform):
     return x_norm
 
 
-def pretile_slide(row, wsi_dir, tile_size, tile_dir, normalize=False, overlap=0):
-    slide_dir = os.path.join(tile_dir, str(row.img_hid).replace('.svs', ''))
+def pretile_slide(row, tile_size, tile_dir, normalize=False, overlap=0):
+    slide_dir = os.path.join(tile_dir, row['image_path'].split('/')[-1].replace('.svs', ''))
     if os.path.exists(slide_dir):
         n_tiles_saved = len(os.listdir(slide_dir))
-        if n_tiles_saved == row.x:
+        if n_tiles_saved == row.n_foreground_tiles:
             print("{} fully tiled; skipping".format(slide_dir))
             return
     else:
         os.mkdir(slide_dir)
-
-    try:
-        slide_file_name = row.slide_file_name
-        slide = OpenSlide(slide_file_name)
-    except AttributeError:
-        slide_file_name = row.img_hid
-        slide = OpenSlide(os.path.join(wsi_dir, slide_file_name))
+    
+    slide = OpenSlide(row['image_path'])
 
     slide_mag = general_utils.get_magnification(slide)
     if slide_mag == config.args.magnification:
@@ -203,8 +191,8 @@ def pretile_slide(row, wsi_dir, tile_size, tile_dir, normalize=False, overlap=0)
     for address, class_ in addresses:
         tile_file_name = os.path.join(slide_dir,
                     str(address).replace('(', '').replace(')', '').replace(', ', '_') + '.png')
-        # if os.path.exists(tile_file_name):
-        #     continue
+        if os.path.exists(tile_file_name):
+            continue
         tile = generator.get_tile(level, address)
 
         if normalize:
@@ -214,28 +202,25 @@ def pretile_slide(row, wsi_dir, tile_size, tile_dir, normalize=False, overlap=0)
 
 
 if __name__ == '__main__':
-    serial = False
+    serial = True
     df = general_utils.load_preprocessed_df(file_name=config.args.preprocessed_cohort_csv_path,
                                             min_n_tiles=1,
-                                            explode=False,
-                                            slide_codes=None)
-    if len(df) == 0:
-        df = general_utils.load_preprocessed_df(file_name=config.args.preprocessed_cohort_csv_path,
-                                                min_n_tiles=1,
-                                                explode=False,
-                                                slide_codes=[])
+                                            explode=False)
 
+    with open('../global_config.yaml', 'r') as f:
+        DIRECTORIES = yaml.safe_load(f)
+        DATA_DIR = DIRECTORIES['data_dir']
+    df['image_path'] = df['image_path'].apply(lambda x: os.path.join(DATA_DIR, x))
+    
     if serial:
         for _, row in df.iterrows():
             pretile_slide(row=row,
-                          wsi_dir=config.args.wsi_dir,
                           tile_size=config.args.tile_size,
                           tile_dir=config.args.tile_dir,
                           normalize=config.args.normalize,
                           overlap=config.args.overlap)
     else:
         Parallel(n_jobs=64)(delayed(pretile_slide)(row=row,
-                          wsi_dir=config.args.wsi_dir,
                           tile_size=config.args.tile_size,
                           tile_dir=config.args.tile_dir,
                           normalize=config.args.normalize,

@@ -11,12 +11,12 @@ import general_utils
 import torch
 import re
 import pandas as pd
+import os
 
-import models
 from dataset import TissueTileDataset
-from general_utils import get_starting_timestamp, get_checkpoint_path, get_train_transforms, get_val_transforms, \
+from general_utils import get_checkpoint_path, get_train_transforms, get_val_transforms, \
     log_results_string
-from models import TissueTileNet
+from models import TissueTileNet, get_model
 
 
 def train_epoch(model, train_loader, optimizer, device, criterion):
@@ -93,12 +93,10 @@ def make_preds(model, loader, device, file_name, n_classes):
                     writer.writerow(row)
 
 
-def serialize(device_id, df, starting_timestamp, fold):
+def serialize(device_id, df, experiment_name, fold):
     starting_epoch = 0
     device = torch.device('cuda:{}'.format(device_id))
     train_df = df[df.split == 'train'].copy()
-    train_df.loc[:, 'long_tile_file_name'] = train_df.img_hid.str.replace('.svs',
-                                                                              '') + '/' + train_df.tile_file_name
     assert 'val' not in train_df.split
     val_df = df[df.split == 'val'].copy()
     assert 'train' not in val_df.split
@@ -126,7 +124,7 @@ def serialize(device_id, df, starting_timestamp, fold):
                                     batch_size=config.args.batch_size,
                                     num_workers=8)
 
-    model = TissueTileNet(model=models.get_model(config), n_classes=n_classes)
+    model = TissueTileNet(model=get_model(config), n_classes=n_classes)
     model.to(device)
 
     optimizer = Adam(model.parameters(),
@@ -152,7 +150,7 @@ def serialize(device_id, df, starting_timestamp, fold):
         else:
             val_loss, val_acc, val_f1, val_confusion = -1, -1, -1, -1
 
-        log_results_string(epoch, starting_epoch, train_loss, val_loss, starting_timestamp, fold)
+        log_results_string(epoch, starting_epoch, train_loss, val_loss, experiment_name, fold)
         results_str = 'training acc {:7.6f} | validation acc {:7.6f}'.format(train_acc, val_acc)
         print(results_str)
         results_str = 'training f1 {:7.6f} | validation f1 {:7.6f}'.format(train_f1, val_f1)
@@ -160,15 +158,15 @@ def serialize(device_id, df, starting_timestamp, fold):
         print('training:\n' + str(train_confusion))
         print('validation:\n' + str(val_confusion))
         print('---')
-        torch.save(model.state_dict(), get_checkpoint_path(starting_timestamp,
+        torch.save(model.state_dict(), get_checkpoint_path(experiment_name,
                                                                    epoch, starting_epoch,
                                                                    fold=fold))
 
 
-def prep_df(csv_path, map_classes=True):
+def prep_df(csv_path, tile_dir, map_classes=True):
     # load dataframe
     df_ = pd.read_csv(csv_path, low_memory=False)
-    df_ = df_[df_.x > 0]
+    df_ = df_[df_.n_foreground_tiles > 0]
     df_.tile_address = df_.tile_address.map(eval)
     df_ = df_.explode('tile_address').reset_index()
     df_['tile_class'] = df_.tile_address.apply(lambda x: x[1])
@@ -196,38 +194,31 @@ def prep_df(csv_path, map_classes=True):
     n_classes = len(map_key)
     map_reverse_key = dict([(v, k) for k, v in map_key.items()])
 
-    print(df_.tile_class.value_counts())
+    #print(df_.tile_class.value_counts())
     if map_classes:
         df_['tile_class'] = df_['tile_class'].map(slideviewer_class_map).map(map_key)
         df_ = df_[df_['tile_class'].isin(map_key.values())]
-    print(df_.tile_class.value_counts())
-    # exit()
-
-    if 'img_hid' not in df_.columns:
-        df_['img_hid'] = df_['image_id'].astype(str) + '.svs'
-
-    df_['tile_file_name'] = df_.apply(
-        lambda x: general_utils.get_tile_file_name('---', x.img_hid, x.tile_address),
-        axis=1).str.split('/').map(lambda x: x[-1])
+    #print(df_.tile_class.value_counts())
+    #print(df_)
+    df_['tile_file_name'] = tile_dir + '/' + \
+                            df_['image_path'].apply(lambda x: x.split('/')[-1].replace('.svs', '')) + '/' + \
+                            df_['tile_address'].apply(lambda x: str(x).replace('(', '').replace(')', '').replace(', ', '_') + '.png')
     return df_, n_classes, map_key, map_reverse_key
 
 
 if __name__ == '__main__':
-    starting_timestamp_ = get_starting_timestamp(config)
-    print(starting_timestamp_)
+    df_, n_classes, map_key, map_reverse_key = prep_df(config.args.preprocessed_cohort_csv_path,
+                                                       tile_dir=config.args.tile_dir)
+    seed = 1123011750
 
-    seed = int(re.sub('[^0-9]', '', starting_timestamp_[5:]))
-
-    df_, n_classes, map_key, map_reverse_key = prep_df(config.args.preprocessed_cohort_csv_path)
-
-    with open('checkpoints/{}_config.pickle'.format(starting_timestamp_), 'wb') as f:
+    with open('checkpoints/{}_config.pickle'.format(config.args.experiment_name), 'wb') as f:
         pickle.dump(config.args, f)
 
     if config.args.crossval > 0:
         for fold, df in enumerate(general_utils.k_fold_ptwise_crossval(df_, config.args.crossval, seed)):
             print('\nFOLD {}'.format(fold))
-            serialize(config.args.gpu[0], df, starting_timestamp_, fold)
-    elif config.args.crossval == -2:
+            serialize(config.args.gpu[0], df, config.args.experiment_name, fold)
+    elif config.args.crossval == 0:
         print('warning: no validation set')
         df_.loc[:, 'split'] = 'train'
-        serialize(config.args.gpu[0], df_, starting_timestamp_, -2)
+        serialize(config.args.gpu[0], df_,config.args.experiment_name, -2)
