@@ -12,6 +12,8 @@ It is recommended to clone the GitHub repository into the same directory as the 
 ## Set global parameters
 In `global_config.yaml`, set the full paths to the directories enclosing the data and code. All scripts assume that the code and data are within subdirectories of these paths, enitled `code` and `data` respectively.
 
+## Move Singularity image to code repository
+Move `qupath-stardist_latest.sif` from `data` to `code/hne-feature-extraction/qupath`.
 
 # Tissue type training
 Using annotations by gynecologic pathologists (found within the `tissue-type-training` directory of the Synapse repository), train a semantic segmentation model to infer tissue type from H&E images. This component is optional: the resulting weights of our training are already stored in `tissue_type_training/checkpoints/tissue_type_classifier_weights.torch`. Other than paths set in global YAML file in the previous step, all options are set in `config.py`. For help, use `python config.py --h`.
