@@ -26,24 +26,24 @@ Use this to explore various model types and hyperparameter configurations.
 `tissue_type_training/train_on_all_annotations.sh` Note that `preprocess.py` and `pretile.py` must be run before this step (a sufficient example is in the cross validation script, so running that before this is sufficient).
  
 # H&E feature extraction
-# Extract tissue type features
+## Extract tissue type features
 Next, we apply our trained model to semantically segment tissue types on slides from our multimodal patient cohort: `hne-feature-extraction/1_infer_tissue_types_and_extract_features.sh`. This is a deterministic process and should exactly replicate the tissue type-based features in `reference_hne_features.csv`.
 
-# Identify nuclei
+## Identify nuclei
 Using the StarDist extension for QuPath, we perform instance segmentation of cellular nuclei and apply a bespoke classification script to distinguish lymphocytes from other nuclei: `hne-feature-extraction/2_extract_objects.sh`. Before running this script, move or copy slides of interest from `data/hne` to `code/hne-feature-extraction/qupath/data/slides`.
 
-# Label nuclei by tissue type; extract nuclear features
+## Label nuclei by tissue type; extract nuclear features
 Finally, we coregister the two feature spaces and extract descriptive statistics for nuclei of each cell type: `hne-feature-extraction/3_label_objects_and_extract_features.sh`. We observe that nuclear detection varies somewhat by run with StarDist, and thus the object-based features may vary among runs. We observe on the order of 1% variation in features calculated in the aggregate (e.g., mean tumor nuclear size).
 
 
-## CT feature extraction
+# CT feature extraction
 We apply the abdominal window and extract features from omental and adnexal lesions contoured by fellowship-trained diagnostic radiologists: `ct-feature-extraction/extract_ct_features.sh`. Features are stored as a csv file in the features subdirectory.
 
 
-## Feature selection 
+# Feature selection 
 We use log partial hazard ratios and their associated significance calculated on univariate Cox regression to select informative features from the CT and H&E feature spaces: `feature-selection/select_features.sh`. The log partial hazard ratio for each feature across the training cohort and the associated volcano plot is generated for each modality in the results subdirectory.
 
 
-## Survival modeling
+# Survival modeling
 Use `feature-selection/environment.yml`.
 We build univariate survival models for histopathologic, radiologic, clinical, and genomic information spaces. Subsequently, we combine the modalities in a late fuson framework and plot the performance: `survival-modeling/train_test.py`. Relevant results and figures are generated in the respective subdirectories.
