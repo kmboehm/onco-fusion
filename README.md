@@ -1,6 +1,12 @@
 # OncoFusion
 This software extracts features from histopathologic whole-slide images, contrast-enhanced computed tomography, targeted sequencing panels, and clinical covariates and subsequently integrates them using a late-fusion machine learning model to stratify patients by overall survival. Repository to accompany <em>Multimodal data integration using machine learning improves risk stratification of high-grade serous ovarian cancer</em> (in press).
 
+## Requirements
+
+Hardware: Tested on a server with 96 CPUs, 500GB CPU RAM, 4GPUs, 64 GB GPU RAM, 1TB storage
+
+Software: Tested on Redhat Enterprise Linux v7.8 with Python v3.9, Conda v4.12, Singularity v3.8.3, and the conda environments specified in the environment.yml files in each sub-directory. 
+
 ## Set up
 
 ### Download Synapse repository
