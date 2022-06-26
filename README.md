@@ -3,7 +3,7 @@ This software extracts features from histopathologic whole-slide images, contras
 
 ## Requirements
 
-Hardware: Tested on a server with 96 CPUs, 500GB CPU RAM, 4GPUs, 64 GB GPU RAM, 1TB storage
+Hardware: Tested on a server with 96 CPUs, 500GB CPU RAM, 4GPUs (Tesla V100, CUDA Version: 11.4), 64 GB GPU RAM, 1TB storage
 
 Software: Tested on Redhat Enterprise Linux v7.8 with Python v3.9, Conda v4.12, Singularity v3.8.3, and the conda environments specified in the environment.yml files in each sub-directory. 
 
