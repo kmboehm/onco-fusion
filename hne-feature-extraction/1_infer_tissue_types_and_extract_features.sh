@@ -1,6 +1,6 @@
 ARGS="--magnification 20
 --cohort_csv_path data/dataframes/hne_df.csv
---preprocessed_cohort_csv_path data/dataframes/preprocessed_tissuetype_hne_df.csv
+--preprocessed_cohort_csv_path data/dataframes/preprocessed_hne_df.csv
 --tile_dir ../tissue-type-training/pretilings
 --tile_selection_type otsu
 --otsu_threshold 0.5
