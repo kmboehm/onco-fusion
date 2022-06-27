@@ -73,7 +73,7 @@ dependencies:
     - medpy==0.4.0
     - numpy==1.18.2
     - pykwalify==1.7.0
-    - pyradiomics==3.0.post2+g896682d
+    - pyradiomics==3.0.1
     - pywavelets==1.0.0
     - pyyaml==5.3.1
     - simpleitk==1.2.4
