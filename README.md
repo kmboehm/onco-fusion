@@ -30,14 +30,13 @@ Use this to explore various model types and hyperparameter configurations.
  
 ## H&E feature extraction
 ### Extract tissue type features
-Next, we apply our trained model to semantically segment tissue types on slides from our multimodal patient cohort: `hne-feature-extraction/1_infer_tissue_types_and_extract_features.sh`. This is a deterministic process and should exactly replicate the tissue type-based features in `reference_hne_features.csv`.
+Next, we apply our trained model to semantically segment tissue types on slides from our multimodal patient cohort: `hne-feature-extraction/1_infer_tissue_types_and_extract_features.sh`. This is the process that ultimately generates the tissue type-based features in `reference_hne_features.csv`.
 
 ### Identify nuclei
 Using the StarDist extension for QuPath, we perform instance segmentation of cellular nuclei and apply a bespoke classification script to distinguish lymphocytes from other nuclei: `hne-feature-extraction/2_extract_objects.sh`. Before running this script, move or copy slides of interest from `data/hne` to `code/hne-feature-extraction/qupath/data/slides`.
 
 ### Label nuclei by tissue type; extract nuclear features
-Finally, we coregister the two feature spaces and extract descriptive statistics for nuclei of each cell type: `hne-feature-extraction/3_label_objects_and_extract_features.sh`. We observe that nuclear detection varies somewhat by run with StarDist, and thus the object-based features may vary among runs. We observe on the order of 1% variation in features calculated in the aggregate (e.g., mean tumor nuclear size).
-
+Finally, we coregister the two feature spaces and extract descriptive statistics for nuclei of each cell type: `hne-feature-extraction/3_label_objects_and_extract_features.sh`. This is the process that ultimately generates the nuclear features in `reference_hne_features.csv`.
 
 ## CT feature extraction
 We apply the abdominal window and extract features from omental and adnexal lesions contoured by fellowship-trained diagnostic radiologists: `ct-feature-extraction/extract_ct_features.sh`. Features are stored as a csv file in the features subdirectory.
