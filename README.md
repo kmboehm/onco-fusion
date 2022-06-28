@@ -1,5 +1,5 @@
 # OncoFusion
-This software extracts features from histopathologic whole-slide images, contrast-enhanced computed tomography, targeted sequencing panels, and clinical covariates and subsequently integrates them using a late-fusion machine learning model to stratify patients by overall survival. Repository to accompany <em>Multimodal data integration using machine learning improves risk stratification of high-grade serous ovarian cancer</em> (in press).
+This software extracts features from histopathologic whole-slide images, contrast-enhanced computed tomography, targeted sequencing panels, and clinical covariates and subsequently integrates them using a late-fusion machine learning model to stratify patients by overall survival. Repository to accompany [<em>Multimodal data integration using machine learning improves risk stratification of high-grade serous ovarian cancer</em>](https://www.nature.com/articles/s43018-022-00388-9).
 
 ## Requirements
 
