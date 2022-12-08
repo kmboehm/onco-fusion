@@ -170,11 +170,11 @@ def extract_feats(object_feat_fn, regional_feature_df_, slide_id):
 if __name__ == '__main__':
 
     checkpoint_name = config.args.checkpoint_path.split('/')[-1].replace('.torch', '')
-    
+
     regional_feat_df_filename = 'tissue_tile_features/{}.csv'.format(checkpoint_name)
 
     object_detection_dir = 'final_objects/{}'.format(checkpoint_name)
-    
+
     merged_feat_df_filename = 'tissue_tile_features/{}_merged.csv'.format(checkpoint_name)
     SERIAL = True
     DETECTION_PROB_THRESHOLD = 0.5
@@ -194,6 +194,7 @@ if __name__ == '__main__':
             results.update(dict_)
 
     df = pd.DataFrame(results).T
+    df.index = df.index.astype('str')
     df = df.join(regional_feat_df, how='inner')
     print(df)
 
