@@ -1,0 +1,22 @@
+universe = vanilla
+executable = 3_label_objects_and_extract_features.sh
+
+# requirements to specify the execution machine needs.
+#requirements = (CUDACapability >= 4)
+
+# "short", "medium", "long" for jobs lasting
+# ~12 hr, ~24 hr, ~7 days
++GPUJobLength = "short"
+
+#request_gpus = 0
+request_memory = 384
+request_cpus = 32
+#request_disk = 10MB
+
+output = $(Cluster)_$(Process).out
+log = $(Cluster)_$(Process).log
+error = $(Cluster)_$(Process).err
+
+# number of jobs to submit
+queue 1
+

@@ -1,3 +1,7 @@
+#!/bin/bash
+source /gpfs/mskmind_ess/limr/mambaforge/etc/profile.d/conda.sh
+conda activate transformer
+
 ARGS="--magnification 20
 --cohort_csv_path data/dataframes/hne_df.csv
 --preprocessed_cohort_csv_path data/dataframes/preprocessed_hne_df.csv

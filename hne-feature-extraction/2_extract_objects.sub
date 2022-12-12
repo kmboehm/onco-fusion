@@ -1,0 +1,22 @@
+universe = vanilla
+executable = _run_gpu_qupath_stardist_singleSlide.sh
+arguments = $(filename)
+
+# requirements to specify the execution machine needs.
+#requirements = (CUDACapability >= 4)
+
+# "short", "medium", "long" for jobs lasting
+# ~12 hr, ~24 hr, ~7 days
++GPUJobLength = "short"
+
+request_gpus = 1
+request_memory = 36GB
+request_cpus = 10
+#request_disk = 10MB
+
+output = $(Cluster)_$(Process).out
+log = $(Cluster)_$(Process).log
+error = $(Cluster)_$(Process).err
+
+# number of jobs to submit
+queue filename from cut -d, -f2 ../data/dataframes/preprocessed_hne_df.csv |
